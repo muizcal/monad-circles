@@ -8,18 +8,14 @@ import {MockUSDC} from "../src/MockUSDC.sol";
 contract CircleTest is Test {
     MockUSDC usdc;
     Circle circle;
-    address a = address(0xA);
-    address b = address(0xB);
-    address c = address(0xC);
+    address[3] ms = [address(0xA), address(0xB), address(0xC)];
     uint256 constant AMT = 10e6;
-    uint256 constant START = 100e6;
 
     function setUp() public {
         usdc = new MockUSDC();
-        circle = new Circle(address(usdc), AMT, 3, 7 days);
-        address[3] memory ms = [a, b, c];
+        circle = new Circle(address(usdc), AMT, 3, 1 days);
         for (uint256 i; i < 3; i++) {
-            usdc.mint(ms[i], START);
+            usdc.mint(ms[i], 100e6);
             vm.startPrank(ms[i]);
             usdc.approve(address(circle), type(uint256).max);
             circle.join();
@@ -27,85 +23,79 @@ contract CircleTest is Test {
         }
     }
 
-    function _everyonePays() internal {
-        address[3] memory ms = [a, b, c];
+    function _vote(uint8 a, uint8 b, uint8 c) internal {
+        vm.prank(ms[0]); circle.castVote(a);
+        vm.prank(ms[1]); circle.castVote(b);
+        vm.prank(ms[2]); circle.castVote(c);
+    }
+
+    function _payRound() internal {
+        for (uint256 i; i < 3; i++) { vm.prank(ms[i]); circle.contribute(); }
+    }
+
+    function test_VotingOpensWhenFull() public view {
+        assertEq(uint256(circle.phase()), 1);
+    }
+
+    function test_LockedMode_PotsLockedUntilAllRoundsThenEveryoneWithdraws() public {
+        _vote(1, 1, 2);
+        assertEq(uint256(circle.mode()), 0);
+        _payRound();
+        address first = circle.getRecipients()[0];
+        vm.prank(first);
+        vm.expectRevert("locked");
+        circle.withdraw();
+        _payRound();
+        _payRound();
+        assertEq(uint256(circle.phase()), 3);
+        address[] memory r = circle.getRecipients();
+        assertTrue(r[0] != r[1] && r[1] != r[2] && r[0] != r[2]);
         for (uint256 i; i < 3; i++) {
             vm.prank(ms[i]);
-            circle.contribute();
+            circle.withdraw();
+            assertEq(usdc.balanceOf(ms[i]), 100e6);
         }
     }
 
-    function test_StartsWhenFull() public view {
-        assertTrue(circle.started());
-        assertEq(circle.memberCount(), 3);
-        assertEq(circle.currentRecipient(), a);
+    function test_AsYouGo_RecipientWithdrawsImmediately() public {
+        _vote(2, 2, 1);
+        assertEq(uint256(circle.mode()), 1);
+        _payRound();
+        address first = circle.getRecipients()[0];
+        vm.prank(first);
+        circle.withdraw();
+        assertEq(usdc.balanceOf(first), 100e6 - AMT + 3 * AMT);
     }
 
-    function test_PayoutGoesToFirstMemberThenSecond() public {
-        _everyonePays();
-        circle.payout();
-        assertEq(usdc.balanceOf(a), START - AMT + 3 * AMT);
-        assertEq(circle.currentRecipient(), b);
-
-        _everyonePays();
-        circle.payout();
-        assertEq(usdc.balanceOf(b), START - 2 * AMT + 3 * AMT);
+    function test_TieDefaultsToLocked() public {
+        Circle two = new Circle(address(usdc), AMT, 2, 1 days);
+        vm.prank(ms[0]); two.join();
+        vm.prank(ms[1]); two.join();
+        vm.prank(ms[0]); two.castVote(1);
+        vm.prank(ms[1]); two.castVote(2);
+        assertEq(uint256(two.mode()), 0);
+        assertEq(uint256(two.phase()), 2);
     }
 
-    function test_PayoutRevertsIfNotAllPaid() public {
-        vm.prank(a);
-        circle.contribute();
-        vm.expectRevert("not all paid");
-        circle.payout();
-    }
-
-    function test_CannotPayTwiceInSameCycle() public {
-        vm.startPrank(a);
-        circle.contribute();
-        vm.expectRevert("already paid");
-        circle.contribute();
-        vm.stopPrank();
-    }
-
-    function test_NonMemberCannotContribute() public {
+    function test_OnlyMembersCanChat() public {
+        vm.prank(ms[0]);
+        circle.say("hello");
+        assertEq(circle.messageCount(), 1);
         vm.prank(address(0xDEAD));
         vm.expectRevert("not member");
-        circle.contribute();
+        circle.say("hi");
     }
 
-    function test_FullCircleEveryoneBreaksEven() public {
-        for (uint256 i; i < 3; i++) {
-            _everyonePays();
-            circle.payout();
-        }
-        assertTrue(circle.finished());
-        assertEq(usdc.balanceOf(a), START);
-        assertEq(usdc.balanceOf(b), START);
-        assertEq(usdc.balanceOf(c), START);
-        assertEq(usdc.balanceOf(address(circle)), 0);
-    }
-
-    function test_LateMembersAfterDeadline() public {
-        vm.prank(a);
-        circle.contribute();
-        assertEq(circle.lateMembers().length, 0);
-        vm.warp(block.timestamp + 8 days);
-        address[] memory late = circle.lateMembers();
-        assertEq(late.length, 2);
-        assertEq(late[0], b);
-        assertEq(late[1], c);
-    }
-
-    function test_CannotJoinTwiceOrWhenFull() public {
-        Circle fresh = new Circle(address(usdc), AMT, 3, 7 days);
-        vm.startPrank(a);
-        fresh.join();
-        vm.expectRevert("already member");
-        fresh.join();
-        vm.stopPrank();
-
-        vm.expectRevert("started");
-        vm.prank(address(0xD));
-        circle.join();
+    function test_StalledLockedCircleRefunds() public {
+        _vote(1, 1, 1);
+        vm.prank(ms[0]); circle.contribute();
+        vm.prank(ms[1]); circle.contribute();
+        vm.warp(block.timestamp + 3 days);
+        vm.prank(ms[0]);
+        circle.abort();
+        vm.prank(ms[0]); circle.refund();
+        vm.prank(ms[1]); circle.refund();
+        assertEq(usdc.balanceOf(ms[0]), 100e6);
+        assertEq(usdc.balanceOf(ms[1]), 100e6);
     }
 }

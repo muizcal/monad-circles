@@ -36,6 +36,7 @@ input{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--lin
 a{color:inherit}
 #stage{height:360px;border-radius:14px;overflow:hidden;background:radial-gradient(circle at 50% 40%,#2a2f66,#080b1d);position:relative;margin:16px 0}#stage canvas{display:block;width:100%;height:100%}#tip{position:absolute;left:14px;bottom:10px;color:#eef0fa;font-size:.85rem;pointer-events:none}
 .late{color:var(--bad);font-size:.9rem}
+.poll{border:1px solid var(--acc);border-radius:10px;padding:12px;margin:10px 0}.chat{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.msgs{max-height:170px;overflow-y:auto;font-size:.9rem;display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -47,6 +48,7 @@ a{color:inherit}
 <div class="card">
   <div class="row">
     <button id="connect" class="go">Connect wallet</button>
+    <button id="disc" class="alt" style="display:none">Disconnect</button>
     <button id="mint" class="alt" disabled>Get 100 test dollars</button>
     <span id="acct" class="tag">Not connected</span>
     <span id="bal" class="tag"></span>
@@ -75,12 +77,12 @@ const CFG = {
   rpc: 'https://testnet-rpc.monad.xyz',
   explorer: 'https://testnet.monadvision.com',
   usdc: '0x4Df8678F2b555a1bE6C0264C2A8Ab3df20c581c6',
-  factory: '0xf645aeB22B731b410B57b8c734a303a89d7A1112',
+  factory: '0xCfEE7461273A19b9b0e8e41cBD7b01A1E203DC26',
   profiles: '0xab97F0d0af3f386b56DcBa66aE33989feEaDd3Ff'
 };
 const USDC_ABI = ['function mint(address,uint256)','function approve(address,uint256) returns (bool)','function allowance(address,address) view returns (uint256)','function balanceOf(address) view returns (uint256)'];
 const FAC_ABI = ['function createCircle(address,uint256,uint256,uint256) returns (address)','function allCircles() view returns (address[])','event CircleCreated(address indexed circle, address indexed creator)'];
-const CIR_ABI = ['function contribution() view returns (uint256)','function maxMembers() view returns (uint256)','function cycleDuration() view returns (uint256)','function started() view returns (bool)','function finished() view returns (bool)','function currentCycle() view returns (uint256)','function paidCount() view returns (uint256)','function getMembers() view returns (address[])','function paid(uint256,address) view returns (bool)','function lateMembers() view returns (address[])','function join()','function contribute()','function payout()'];
+const CIR_ABI = ['function contribution() view returns (uint256)','function maxMembers() view returns (uint256)','function cycleDuration() view returns (uint256)','function cycleStart() view returns (uint256)','function phase() view returns (uint8)','function mode() view returns (uint8)','function currentRound() view returns (uint256)','function votesLocked() view returns (uint256)','function votesAsYouGo() view returns (uint256)','function voted(address) view returns (uint8)','function owed(address) view returns (uint256)','function getMembers() view returns (address[])','function getRecipients() view returns (address[])','function paid(uint256,address) view returns (bool)','function lateMembers() view returns (address[])','function messageCount() view returns (uint256)','function getMessages(uint256,uint256) view returns (tuple(address from,uint256 time,string text)[])','function join()','function say(string)','function castVote(uint8)','function finalizeVote()','function contribute()','function withdraw()','function abort()','function refund()'];
 
 const PROF_ABI = ['function names(address) view returns (string)','function setName(string)'];
 const readProv = new ethers.providers.JsonRpcProvider(CFG.rpc);
@@ -110,7 +112,7 @@ async function tx(promise, label) {
   say(label + '… waiting for the block', 0);
   let r = null;
   try { r = await readProv.waitForTransaction(t.hash, 1, 90000); } catch (e) {}
-  say(`${label} ${r ? 'done' : 'sent, still confirming'}. <a target="_blank" rel="noopener" href="${CFG.explorer}/tx/${t.hash}">View transaction</a>`, 9000);
+  say(`${label} ${r ? 'done' : 'not confirmed (check your wallet network RPC and MON balance)'}. <a target="_blank" rel="noopener" href="${CFG.explorer}/tx/${t.hash}">View transaction</a>`, 9000);
   return r;
 }
 
@@ -129,56 +131,77 @@ async function connect() {
     factory = new ethers.Contract(CFG.factory, FAC_ABI, signer);
     $('acct').textContent = short(me);
     ['mint', 'create', 'savename'].forEach(i => $(i).disabled = false);
-    $('connect').textContent = 'Connected';
+    $('connect').textContent = 'Connected'; $('disc').style.display = '';
     await refresh();
   } catch (e) { err(e); }
 }
 
-async function refresh() {
+async function refresh(quiet) {
   try {
-    $('bal').textContent = '$' + fmt(await usdc.balanceOf(me));
+    const ub = await new ethers.Contract(CFG.usdc, USDC_ABI, readProv).balanceOf(me);
+    const mb = await readProv.getBalance(me);
+    $('bal').textContent = '$' + fmt(ub) + ' | ' + Number(ethers.utils.formatEther(mb)).toFixed(3) + ' MON';
     const p = new URLSearchParams(location.search).get('circle');
     if (p && ethers.utils.isAddress(p)) remember(ethers.utils.getAddress(p));
     const addrs = saved();
     if (!addrs.length) { $('list').innerHTML = '<p>No circles yet. Start one above, or open an invite link from a friend.</p>'; return; }
     const cards = await Promise.all(addrs.slice().reverse().map(a => card(a).catch(() => '')));
+    const fa = document.activeElement, keep = fa && fa.dataset && fa.dataset.chat, pos = keep ? fa.selectionStart : 0;
     $('list').innerHTML = cards.join('');
+    document.querySelectorAll('.msgs').forEach(m => m.scrollTop = m.scrollHeight);
+    if (keep) { const el = document.querySelector('[data-chat="' + keep + '"]'); if (el) { el.focus(); el.setSelectionRange(pos, pos); } }
     draw(selected);
-  } catch (e) { err(e); }
+  } catch (e) { if (!quiet) err(e); }
 }
 
+const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const drafts = {};
 async function card(addr) {
   const c = new ethers.Contract(addr, CIR_ABI, readProv);
-  const [amt, max, dur, started, finished, cycle, members, late] = await Promise.all([
-    c.contribution(), c.maxMembers(), c.cycleDuration(), c.started(), c.finished(), c.currentCycle(), c.getMembers(), c.lateMembers()]);
-  const n = max.toNumber(), cyc = cycle.toNumber();
+  const [amt, max, dur, p, md, round, members, recips, late, nmsg, cs, vL, vA] = await Promise.all([c.contribution(), c.maxMembers(), c.cycleDuration(), c.phase(), c.mode(), c.currentRound(), c.getMembers(), c.getRecipients(), c.lateMembers(), c.messageCount(), c.cycleStart(), c.votesLocked(), c.votesAsYouGo()]);
+  const n = max.toNumber(), rd = round.toNumber(), lc = a => a.toLowerCase(), mine = lc(me), active = p === 2;
+  const idx = members.findIndex(m => lc(m) === mine), joined = idx >= 0;
   const nm = await Promise.all(members.map(nameOf));
-  const joined = members.some(m => m.toLowerCase() === me.toLowerCase());
-  const paidFlags = started && !finished ? await Promise.all(members.map(m => c.paid(cyc, m))) : [];
-  const iPaid = joined && paidFlags[members.findIndex(m => m.toLowerCase() === me.toLowerCase())];
-  const allPaid = paidFlags.length && paidFlags.every(Boolean);
-  scenes[addr] = { n, members, nm, paid: paidFlags, cyc, started, finished, amt: fmt(amt) };
+  const paidF = active ? await Promise.all(members.map(m => c.paid(rd, m))) : [];
+  const [owed, myVote] = joined ? await Promise.all([c.owed(me), c.voted(me)]) : [ethers.constants.Zero, 0];
+  const first = Math.max(0, nmsg.toNumber() - 40);
+  const msgs = nmsg.gt(0) ? await c.getMessages(first, nmsg.toNumber() - first) : [];
+  const msgNames = await Promise.all(msgs.map(m => nameOf(m.from)));
+  const got = {}; recips.forEach(a => got[lc(a)] = true);
+  scenes[addr] = { n, members, nm, paid: paidF, cyc: rd, started: active, finished: p === 3, amt: fmt(amt), got };
   if (!selected || !scenes[selected]) selected = addr;
   let slots = '';
   for (let i = 0; i < n; i++) {
-    const m = members[i];
-    const cls = !m ? 'slot' : 'slot in' + (paidFlags[i] ? ' paid' : '') + (started && !finished && i === cyc ? ' turn' : '');
-    slots += `<div class="slot ${cls}" title="${m || 'open seat'}">${m ? (m.toLowerCase() === me.toLowerCase() ? 'You' : nm[i]) : 'open'}</div>`;
+    const m = members[i], cls = !m ? 'slot' : 'slot in' + (paidF[i] ? ' paid' : '') + (got[lc(m)] ? ' turn' : '');
+    slots += `<div class="slot ${cls}" title="${m || 'open seat'}">${m ? (lc(m) === mine ? 'You' : esc(nm[i])) : 'open'}${m && got[lc(m)] ? ' ★' : ''}</div>`;
   }
-  const status = finished ? 'Finished' : started ? `Round ${cyc + 1} of ${n}` : `Waiting for members (${members.length}/${n})`;
+  const history = recips.map((a, i) => `<div>Round ${i + 1}: <strong>${lc(a) === mine ? 'You' : esc(nm[members.findIndex(m => lc(m) === lc(a))])}</strong> received $${fmt(amt.mul(n))}</div>`).join('');
+  const PH = ['Waiting for members (' + members.length + '/' + n + ')', 'Voting', 'Round ' + (rd + 1) + ' of ' + n, 'Finished', 'Stopped'];
+  let poll = '';
+  if (p === 1) poll = `<div class="poll"><strong>How should pots be paid?</strong>
+    <p>Locked: every pot stays in the contract until all rounds are done. Safest. Withdraw as you receive: cash out right away, but you trust the others to keep paying.</p>
+    <div class="row"><button ${myVote || !joined ? 'disabled' : ''} onclick="act('${addr}','castVote',1)">Locked until the end (${vL})</button>
+    <button ${myVote || !joined ? 'disabled' : ''} onclick="act('${addr}','castVote',2)">Withdraw as I receive (${vA})</button></div>
+    <p>${myVote ? 'You voted ' + (myVote === 1 ? 'locked' : 'withdraw as you receive') + '. ' : ''}${vL.add(vA)} of ${n} voted. Payments start when everyone has voted. A tie means locked.</p>
+    <button class="alt" onclick="act('${addr}','finalizeVote')">Close voting (works after 1 day)</button></div>`;
+  const canW = owed.gt(0) && (p === 3 || (p === 2 && md === 1));
   let btns = '';
-  if (!started && !joined) btns += `<button onclick="act('${addr}','join')">Join circle</button>`;
-  if (started && !finished && joined && !iPaid) btns += `<button class="go" onclick="act('${addr}','contribute')">Pay $${fmt(amt)}</button>`;
-  if (allPaid) btns += `<button onclick="act('${addr}','payout')">Send pot to ${members[cyc].toLowerCase() === me.toLowerCase() ? 'you' : nm[cyc]}</button>`;
+  if (p === 0 && !joined) btns += `<button onclick="act('${addr}','join')">Join circle</button>`;
+  if (active && joined && !paidF[idx]) btns += `<button class="go" onclick="act('${addr}','contribute')">Pay $${fmt(amt)}</button>`;
+  if (canW) btns += `<button class="go" onclick="act('${addr}','withdraw')">Withdraw $${fmt(owed)}</button>`;
+  if (active && md === 0 && joined && Date.now() / 1000 > cs.toNumber() + 2 * dur.toNumber()) btns += `<button class="alt" onclick="act('${addr}','abort')">Stop circle and get refunds</button>`;
+  if (p === 4 && joined) btns += `<button class="go" onclick="act('${addr}','refund')">Claim refund</button>`;
+  const mypot = joined && owed.gt(0) ? `<div class="meta"><strong>Your pot: $${fmt(owed)}</strong><span class="tag">${canW ? 'Ready to withdraw' : 'Locked until all rounds finish'}</span></div>` : '';
+  const chat = joined || msgs.length ? `<div class="chat"><div class="msgs">${msgs.map((m, i) => `<div><b>${lc(m.from) === mine ? 'You' : esc(msgNames[i])}</b> ${esc(m.text)}</div>`).join('') || '<span style="color:var(--mut)">No messages yet. Say hi and agree how to run this circle.</span>'}</div>` + (joined ? `<div class="row"><input data-chat="${addr}" maxlength="200" placeholder="Message the group" value="${esc(drafts[addr] || '')}" oninput="drafts['${addr}']=this.value" onkeydown="if(event.key==='Enter')send('${addr}')" style="width:min(100%,340px)"><button class="alt" onclick="send('${addr}')">Send</button></div>` : '') + '</div>' : '';
   return `<div class="card">
-    <div class="row" style="justify-content:space-between"><strong>$${fmt(amt)} each, $${fmt(amt.mul(n))} pot</strong><span class="tag">${status}</span></div>
-    <div class="slots">${slots}</div>
-    <div class="meta"><span>Every ${dur.div(86400).toString()} days</span><a target="_blank" rel="noopener" href="${CFG.explorer}/address/${addr}">${short(addr)}</a></div>
+    <div class="row" style="justify-content:space-between"><strong>$${fmt(amt)} each, $${fmt(amt.mul(n))} pot</strong><span class="tag">${PH[p]}</span></div>
+    <div class="slots">${slots}</div>${poll}${history ? '<div class="meta" style="flex-direction:column;gap:2px">' + history + '</div>' : ''}${mypot}
+    <div class="meta"><span>Every ${dur.div(86400).toString()} days</span>${p >= 2 && p < 4 ? '<span>' + (md === 0 ? 'Pots locked until the end' : 'Pots withdrawable') + '</span>' : ''}<a target="_blank" rel="noopener" href="${CFG.explorer}/address/${addr}">${short(addr)}</a></div>
     ${late.length ? `<div class="late">Late this round: ${late.map(short).join(', ')}</div>` : ''}
-    <div class="row">${btns}<button class="alt" onclick="view('${addr}')">View in 3D</button><button class="alt" onclick="share('${addr}')">Copy invite link</button></div></div>`;
+    <div class="row">${btns}<button class="alt" onclick="view('${addr}')">View in 3D</button><button class="alt" onclick="share('${addr}')">Copy invite link</button></div>${chat}</div>`;
 }
 
-async function act(addr, fn) {
+async function act(addr, fn, arg) {
   try {
     const c = new ethers.Contract(addr, CIR_ABI, signer);
     remember(addr);
@@ -186,12 +209,16 @@ async function act(addr, fn) {
       const amt = await c.contribution();
       if ((await usdc.allowance(me, addr)).lt(amt)) await tx(usdc.approve(addr, ethers.constants.MaxUint256), 'Approving');
     }
-    await tx(c[fn](), { join: 'Joining', contribute: 'Paying', payout: 'Sending pot' }[fn]);
-    await refresh();
-  } catch (e) { err(e); }
+    await tx(c[fn](...(arg !== undefined ? [arg] : [])), { join: 'Joining', say: 'Sending message', castVote: 'Voting', finalizeVote: 'Closing vote', contribute: 'Paying', withdraw: 'Withdrawing', abort: 'Stopping circle', refund: 'Claiming refund' }[fn]);
+    await refresh(); return true;
+  } catch (e) { err(e); return false; }
+}
+async function send(addr) {
+  const t = (drafts[addr] || '').trim(); if (!t) return;
+  if (await act(addr, 'say', t)) { drafts[addr] = ''; const el = document.querySelector('[data-chat="' + addr + '"]'); if (el) el.value = ''; }
 }
 
-const scenes = {}; let selected = null, T, R, S, G, clock = 0; const mouse = { x: 0, y: 0 };
+let lastSig = ''; const scenes = {}; let selected = null, T, R, S, G, clock = 0; const mouse = { x: 0, y: 0 };
 function view(a) { selected = a; draw(a); $('stage').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
 function size() { const e = $('stage'); R.setSize(e.clientWidth, e.clientHeight, false); T.aspect = e.clientWidth / e.clientHeight; T.updateProjectionMatrix(); }
 function init3d() {
@@ -222,7 +249,7 @@ function tag(text) {
 }
 function draw(a) {
   if (!G || !a || !scenes[a]) return;
-  const d = scenes[a]; while (G.children.length) G.remove(G.children[0]);
+  const d = scenes[a]; const sig = a + me + JSON.stringify(d); if (sig === lastSig) return; lastSig = sig; while (G.children.length) G.remove(G.children[0]);
   const paidN = d.paid.filter(Boolean).length, coins = d.finished ? d.n : Math.max(paidN, 1);
   for (let i = 0; i < coins; i++) {
     const m = new THREE.Mesh(new THREE.CylinderGeometry(.9, .9, .14, 40), new THREE.MeshStandardMaterial({ color: 0xf2a900, metalness: .85, roughness: .3, emissive: 0x4a2c00, transparent: true, opacity: paidN || d.finished ? 1 : .35 }));
@@ -235,15 +262,28 @@ function draw(a) {
     b.position.set(x, 0, z); b.userData = { bob: true, y0: 0 }; G.add(b);
     const t = tag(mem ? (mem.toLowerCase() === me.toLowerCase() ? 'You' : d.nm[i]) : 'open seat'); t.position.set(x, 1.3, z); G.add(t);
     if (d.paid[i]) { const rg = new THREE.Mesh(new THREE.TorusGeometry(.85, .05, 12, 40), new THREE.MeshBasicMaterial({ color: 0x35e0a1 })); rg.position.set(x, 0, z); rg.rotation.x = Math.PI / 2; G.add(rg); }
-    if (d.started && !d.finished && i === d.cyc) { const rg = new THREE.Mesh(new THREE.TorusGeometry(1.05, .07, 12, 40), new THREE.MeshBasicMaterial({ color: 0xf2a900 })); rg.position.set(x, 0, z); rg.rotation.x = Math.PI / 2; rg.userData = { pulse: true }; G.add(rg); }
+    if (mem && d.got[mem.toLowerCase()]) { const rg = new THREE.Mesh(new THREE.TorusGeometry(1.05, .07, 12, 40), new THREE.MeshBasicMaterial({ color: 0xf2a900 })); rg.position.set(x, 0, z); rg.rotation.x = Math.PI / 2; rg.userData = { pulse: true }; G.add(rg); }
   }
-  $('tip').textContent = '$' + d.amt + ' each. ' + (d.finished ? 'Circle finished.' : d.started ? 'Round ' + (d.cyc + 1) + ' of ' + d.n + ', gold ring takes the pot, green ring has paid.' : 'Waiting for members to join.') + ' Move your mouse to look around.';
+  $('tip').textContent = '$' + d.amt + ' each. ' + (d.finished ? 'Circle finished.' : d.started ? 'Round ' + (d.cyc + 1) + ' of ' + d.n + ', gold ring = already received a pot, green ring = paid this round.' : 'Waiting for members to join.') + ' Move your mouse to look around.';
 }
 $('savename').onclick = async () => {
   if (!CFG.profiles.startsWith('0x')) return say('Add the Profiles contract address to CFG.profiles first.');
   try { await tx(new ethers.Contract(CFG.profiles, PROF_ABI, signer).setName($('nick').value.trim()), 'Saving name'); delete nameCache[me.toLowerCase()]; await refresh(); } catch (e) { err(e); }
 };
 if (window.THREE) init3d();
+async function disconnect() {
+  try { await window.ethereum.request({ method: 'wallet_revokePermissions', params: [{ eth_accounts: {} }] }); } catch (e) {}
+  me = signer = null; lastSig = '';
+  ['mint', 'create', 'savename'].forEach(i => $(i).disabled = true);
+  $('connect').textContent = 'Connect wallet'; $('disc').style.display = 'none';
+  $('acct').textContent = 'Not connected'; $('bal').textContent = '';
+  $('list').innerHTML = '<p>Connect your wallet to see circles.</p>'; $('tip').textContent = 'Connect your wallet to see your circle in 3D';
+  if (G) while (G.children.length) G.remove(G.children[0]);
+  say('Disconnected.');
+}
+$('disc').onclick = disconnect;
+setInterval(() => { if (me && !document.hidden) refresh(true); }, 8000);
+if (window.ethereum) window.ethereum.on('accountsChanged', a => { if (!a.length) disconnect(); else if (me) connect(); });
 $('connect').onclick = connect;
 $('mint').onclick = async () => { try { await tx(usdc.mint(me, 100e6), 'Minting'); await refresh(); } catch (e) { err(e); } };
 $('create').onclick = async () => {

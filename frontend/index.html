@@ -305,6 +305,20 @@ async function disconnect() {
   say('Disconnected.');
 }
 $('disc').onclick = disconnect;
+let lastBlock = 0, skip = 0;
+async function tick() {
+  if (!me || busy || refreshing || document.hidden) return;
+  const head = await readProv.getBlockNumber();
+  if (!lastBlock) { lastBlock = head; return; }
+  if (head <= lastBlock) return;
+  const from = Math.max(lastBlock + 1, head - 90);
+  const addrs = saved();
+  lastBlock = head;
+  if (!addrs.length) return;
+  const logs = await readProv.send('eth_getLogs', [{ address: addrs, fromBlock: ethers.utils.hexValue(from), toBlock: ethers.utils.hexValue(head) }]);
+  if (logs.length) refresh(true);
+}
+setInterval(() => { if (skip > 0) { skip--; return; } tick().catch(() => { skip = 10; }); }, 2000);
 setInterval(() => { if (me && !busy && !document.hidden) refresh(true); }, 20000);
 if (window.ethereum) window.ethereum.on('accountsChanged', a => { if (!a.length) disconnect(); else if (me) connect(); });
 $('connect').onclick = connect;

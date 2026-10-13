@@ -150,22 +150,27 @@ async function connect() {
   } catch (e) { err(e); }
 }
 
+let refreshing = false;
 async function refresh(quiet) {
+  if (refreshing) { if (quiet) return; while (refreshing) await new Promise(r => setTimeout(r, 300)); }
+  refreshing = true;
   try {
     const ub = await new ethers.Contract(CFG.usdc, USDC_ABI, readProv).balanceOf(me);
     const mb = await readProv.getBalance(me);
     $('bal').textContent = '$' + fmt(ub) + ' | ' + Number(ethers.utils.formatEther(mb)).toFixed(3) + ' MON';
     const p = new URLSearchParams(location.search).get('circle');
     if (p && ethers.utils.isAddress(p)) remember(ethers.utils.getAddress(p));
-    const addrs = saved();
+    const live = (await new ethers.Contract(CFG.factory, FAC_ABI, readProv).allCircles()).map(x => x.toLowerCase());
+    const addrs = saved().filter(a => live.includes(a.toLowerCase()));
     if (!addrs.length) { $('list').innerHTML = '<p>No circles yet. Start one above, or open an invite link from a friend.</p>'; return; }
-    const cards = await Promise.all(addrs.slice().reverse().map(a => card(a).catch(() => '')));
+    const cards = [];
+    for (const a of addrs.slice().reverse()) cards.push(await card(a).catch(() => ''));
     const fa = document.activeElement, keep = fa && fa.dataset && fa.dataset.chat, pos = keep ? fa.selectionStart : 0;
     $('list').innerHTML = cards.join('');
     document.querySelectorAll('.msgs').forEach(m => m.scrollTop = m.scrollHeight);
     if (keep) { const el = document.querySelector('[data-chat="' + keep + '"]'); if (el) { el.focus(); el.setSelectionRange(pos, pos); } }
     draw(selected);
-  } catch (e) { if (!quiet) err(e); }
+  } catch (e) { if (!quiet) err(e); } finally { refreshing = false; }
 }
 
 const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -216,18 +221,20 @@ async function card(addr) {
     <div class="row">${btns}<button class="alt" onclick="view('${addr}')">View in 3D</button><button class="alt" onclick="share('${addr}')">Copy invite link</button></div>${chat}</div>`;
 }
 
-async function retry(f) { try { return await f(); } catch (e) { if (/missing revert data|CALL_EXCEPTION|UNPREDICTABLE_GAS_LIMIT/.test((e.code || '') + ' ' + (e.message || ''))) { await new Promise(r => setTimeout(r, 2000)); return await f(); } throw e; } }
+async function retry(f) { try { return await f(); } catch (e) { if (/missing revert data|CALL_EXCEPTION|UNPREDICTABLE_GAS_LIMIT|rate limit|429|SERVER_ERROR/.test((e.code || '') + ' ' + (e.message || ''))) { await new Promise(r => setTimeout(r, 2000)); return await f(); } throw e; } }
+let busy = false;
 async function act(addr, fn, arg) {
+  busy = true;
   try {
     const c = new ethers.Contract(addr, CIR_ABI, signer);
     remember(addr);
     if (fn === 'contribute') {
-      const amt = await c.contribution();
-      if ((await usdc.allowance(me, addr)).lt(amt)) { await tx(usdc.approve(addr, ethers.constants.MaxUint256), 'Approving'); await new Promise(r => setTimeout(r, 2500)); }
+      const amt = await retry(() => c.contribution());
+      if ((await retry(() => usdc.allowance(me, addr))).lt(amt)) { await tx(usdc.approve(addr, ethers.constants.MaxUint256), 'Approving'); await new Promise(r => setTimeout(r, 2500)); }
     }
     await tx(retry(() => c[fn](...(arg !== undefined ? [arg] : []))), { join: 'Joining', say: 'Sending message', castVote: 'Voting', finalizeVote: 'Closing vote', contribute: 'Paying', withdraw: 'Withdrawing', abort: 'Stopping circle', refund: 'Claiming refund' }[fn]);
     await refresh(); return true;
-  } catch (e) { err(e); return false; }
+  } catch (e) { err(e); return false; } finally { busy = false; }
 }
 async function send(addr) {
   const t = (drafts[addr] || '').trim(); if (!t) return;
@@ -298,7 +305,7 @@ async function disconnect() {
   say('Disconnected.');
 }
 $('disc').onclick = disconnect;
-setInterval(() => { if (me && !document.hidden) refresh(true); }, 8000);
+setInterval(() => { if (me && !busy && !document.hidden) refresh(true); }, 20000);
 if (window.ethereum) window.ethereum.on('accountsChanged', a => { if (!a.length) disconnect(); else if (me) connect(); });
 $('connect').onclick = connect;
 $('mint').onclick = async () => { try { await tx(usdc.mint(me, 100e6), 'Minting'); await refresh(); } catch (e) { err(e); } };

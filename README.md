@@ -6,7 +6,7 @@ Monad Circles is a savings circle on Monad, built for the Consumer Products & Pa
 
 A savings circle is a group of people who each put in a fixed amount every round. In every round one member takes the whole pot, until everyone has had a turn. It goes by many names (ajo, esusu, tanda, chit fund, susu) and a lot of people already use it. The usual weak point is trust: someone has to hold the cash, and someone has to keep the order fair. Here a contract does both jobs.
 
-- Live app: ADD_YOUR_HOSTED_LINK
+- Live app: https://https://monad-circles-frontend.vercel.app
 - Demo video: ADD_YOUR_VIDEO_LINK
 - Network: Monad Testnet (chain ID 10143)
 

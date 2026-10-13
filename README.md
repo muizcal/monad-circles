@@ -103,6 +103,7 @@ This is a hackathon prototype. These are the main gaps we know about:
 - **In locked mode the draw order does not change what anyone ends up with.** Everyone gets back what they paid in. The value there is forced saving, not early access to cash.
 - **Anyone with an invite link can join until the circle is full.** There is no allowlist yet.
 - **Chat is on-chain and public.** Every message is a transaction, so nothing private should be posted.
+- **The public testnet RPC is rate-limited.** If the app says the network is busy, wait a few seconds and try again.
 - **The token is a test token.** A real deployment would use a real stablecoin, and would need a compliance review in each place it is offered.
 - **Login is a normal browser wallet.** Email or passkey login with sponsored gas would suit non-crypto users better and is the next thing we would add.
 - **Circle lists are stored per browser.** Opening the invite link again restores a circle on a new device.

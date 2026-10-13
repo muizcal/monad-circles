@@ -99,7 +99,23 @@ const FAC_ABI = ['function createCircle(address,uint256,uint256,uint256) returns
 const CIR_ABI = ['function contribution() view returns (uint256)','function maxMembers() view returns (uint256)','function cycleDuration() view returns (uint256)','function cycleStart() view returns (uint256)','function phase() view returns (uint8)','function mode() view returns (uint8)','function currentRound() view returns (uint256)','function votesLocked() view returns (uint256)','function votesAsYouGo() view returns (uint256)','function voted(address) view returns (uint8)','function owed(address) view returns (uint256)','function getMembers() view returns (address[])','function getRecipients() view returns (address[])','function paid(uint256,address) view returns (bool)','function lateMembers() view returns (address[])','function messageCount() view returns (uint256)','function getMessages(uint256,uint256) view returns (tuple(address from,uint256 time,string text)[])','function join()','function say(string)','function castVote(uint8)','function finalizeVote()','function contribute()','function withdraw()','function abort()','function refund()'];
 
 const PROF_ABI = ['function names(address) view returns (string)','function setName(string)'];
-const readProv = new ethers.providers.JsonRpcProvider(CFG.rpc);
+const readProv = new ethers.providers.StaticJsonRpcProvider(CFG.rpc, { chainId: 10143, name: 'monad-testnet' });
+(function () {
+  const rawSend = readProv.send.bind(readProv);
+  readProv.send = async (m, p) => {
+    for (let i = 0; ; i++) {
+      try { return await rawSend(m, p); } catch (e) {
+        const t = (e.code || '') + ' ' + (e.message || '');
+        if (i >= 4 || !/429|rate limit|SERVER_ERROR|TIMEOUT|NETWORK_ERROR/i.test(t)) throw e;
+        await new Promise(r => setTimeout(r, 700 * (i + 1)));
+      }
+    }
+  };
+})();
+async function sendTx(contract, fn, args) {
+  const gas = await contract.connect(readProv).estimateGas[fn](...args, { from: me });
+  return contract[fn](...args, { gasLimit: gas.mul(13).div(10) });
+}
 const nameCache = {};
 const saved = () => { try { return JSON.parse(localStorage.getItem('circles') || '[]'); } catch (e) { return []; } };
 function remember(a) { try { const l = saved(); if (!l.includes(a)) localStorage.setItem('circles', JSON.stringify(l.concat(a))); } catch (e) {} }
@@ -118,7 +134,7 @@ const fmt = v => (Number(v) / 1e6).toLocaleString(undefined, {maximumFractionDig
 const short = a => a.slice(0, 6) + '…' + a.slice(-4);
 
 function say(t, ms = 6000) { const m = $('msg'); m.innerHTML = t; m.style.display = 'block'; if (ms) setTimeout(() => m.style.display = 'none', ms); }
-function err(e) { console.error(e); say('Failed: ' + (e.reason || (e.error && e.error.message) || e.message || e).toString().slice(0, 160)); }
+function err(e) { console.error(e); say(/429|rate limit/i.test((e.message || '') + ' ' + (e.error && e.error.message || '')) ? 'The testnet network is busy. Wait a few seconds and try again.' : 'Failed: ' + (e.reason || (e.error && e.error.message) || e.message || e).toString().slice(0, 160)); }
 
 async function tx(promise, label) {
   say(label + '… confirm in your wallet', 0);
@@ -229,10 +245,10 @@ async function act(addr, fn, arg) {
     const c = new ethers.Contract(addr, CIR_ABI, signer);
     remember(addr);
     if (fn === 'contribute') {
-      const amt = await retry(() => c.contribution());
-      if ((await retry(() => usdc.allowance(me, addr))).lt(amt)) { await tx(usdc.approve(addr, ethers.constants.MaxUint256), 'Approving'); await new Promise(r => setTimeout(r, 2500)); }
+      const amt = await new ethers.Contract(addr, CIR_ABI, readProv).contribution();
+      if ((await new ethers.Contract(CFG.usdc, USDC_ABI, readProv).allowance(me, addr)).lt(amt)) { await tx(retry(() => sendTx(usdc, 'approve', [addr, ethers.constants.MaxUint256])), 'Approving'); await new Promise(r => setTimeout(r, 2500)); }
     }
-    await tx(retry(() => c[fn](...(arg !== undefined ? [arg] : []))), { join: 'Joining', say: 'Sending message', castVote: 'Voting', finalizeVote: 'Closing vote', contribute: 'Paying', withdraw: 'Withdrawing', abort: 'Stopping circle', refund: 'Claiming refund' }[fn]);
+    await tx(retry(() => sendTx(c, fn, arg !== undefined ? [arg] : [])), { join: 'Joining', say: 'Sending message', castVote: 'Voting', finalizeVote: 'Closing vote', contribute: 'Paying', withdraw: 'Withdrawing', abort: 'Stopping circle', refund: 'Claiming refund' }[fn]);
     await refresh(); return true;
   } catch (e) { err(e); return false; } finally { busy = false; }
 }
@@ -291,7 +307,7 @@ function draw(a) {
 }
 $('savename').onclick = async () => {
   if (!CFG.profiles.startsWith('0x')) return say('Add the Profiles contract address to CFG.profiles first.');
-  try { await tx(new ethers.Contract(CFG.profiles, PROF_ABI, signer).setName($('nick').value.trim()), 'Saving name'); delete nameCache[me.toLowerCase()]; await refresh(); } catch (e) { err(e); }
+  try { await tx(retry(() => sendTx(new ethers.Contract(CFG.profiles, PROF_ABI, signer), 'setName', [$('nick').value.trim()])), 'Saving name'); delete nameCache[me.toLowerCase()]; await refresh(); } catch (e) { err(e); }
 };
 if (window.THREE) init3d();
 async function disconnect() {
@@ -322,11 +338,11 @@ setInterval(() => { if (skip > 0) { skip--; return; } tick().catch(() => { skip 
 setInterval(() => { if (me && !busy && !document.hidden) refresh(true); }, 20000);
 if (window.ethereum) window.ethereum.on('accountsChanged', a => { if (!a.length) disconnect(); else if (me) connect(); });
 $('connect').onclick = connect;
-$('mint').onclick = async () => { try { await tx(usdc.mint(me, 100e6), 'Minting'); await refresh(); } catch (e) { err(e); } };
+$('mint').onclick = async () => { try { await tx(retry(() => sendTx(usdc, 'mint', [me, 100e6])), 'Minting'); await refresh(); } catch (e) { err(e); } };
 $('create').onclick = async () => {
   try {
     const amt = ethers.BigNumber.from(Math.round(Number($('amt').value) * 1e6));
-    const rc = await tx(factory.createCircle(CFG.usdc, amt, Number($('mem').value), Number($('days').value) * 86400), 'Creating circle');
+    const rc = await tx(retry(() => sendTx(factory, 'createCircle', [CFG.usdc, amt, Number($('mem').value), Number($('days').value) * 86400])), 'Creating circle');
     if (rc) { const ev = rc.logs.map(x => { try { return factory.interface.parseLog(x); } catch (e) { return null; } }).find(x => x && x.name === 'CircleCreated'); if (ev) remember(ev.args.circle); }
     await refresh();
   } catch (e) { err(e); }

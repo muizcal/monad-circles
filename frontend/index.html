@@ -49,7 +49,7 @@ a{color:inherit}
   <summary style="cursor:pointer;font-weight:600">How to use this app</summary>
   <p style="margin-top:10px"><strong>Testnet only.</strong> The dollars here are free test tokens with no real value. Never send real money to this app.</p>
   <ol style="margin:8px 0 0 18px;padding:0;color:var(--mut)">
-    <li>Connect a browser wallet (MetaMask or Rabby). You need a little free testnet MON for fees from faucet.monad.xyz. Then click "Get 100 test dollars".</li>
+    <li>Connect a browser wallet (MetaMask, OKX Wallet or any EVM wallet). You need a little free testnet MON for fees: use the <a href="https://faucet.monad.xyz" target="_blank" rel="noopener">Monad faucet</a>. Then click "Get 100 test dollars".</li>
     <li>Start a circle: choose how much each person pays, how many members, and the round length. Press "Copy invite link" and send it to your group. If a friend sent you a link, just open it.</li>
     <li>Everyone joins, can save a display name, and can chat with the group.</li>
     <li>When the circle is full, every member votes: pots locked until the last round (safest), or withdraw as you receive.</li>
@@ -64,6 +64,7 @@ a{color:inherit}
     <button id="connect" class="go">Connect wallet</button>
     <button id="disc" class="alt" style="display:none">Disconnect</button>
     <button id="mint" class="alt" disabled>Get 100 test dollars</button>
+    <button id="faucet" class="alt">Get testnet MON</button>
     <span id="acct" class="tag">Not connected</span>
     <span id="bal" class="tag"></span>
     <input id="nick" placeholder="Your name" maxlength="24" style="width:120px"><button id="savename" class="alt" disabled>Save name</button>
@@ -147,7 +148,7 @@ async function tx(promise, label) {
 }
 
 async function connect() {
-  if (!window.ethereum) return say('No wallet found. Install MetaMask or Rabby.');
+  if (!window.ethereum) return say('No wallet found. Install MetaMask, OKX Wallet or another EVM wallet.');
   try {
     await window.ethereum.request({ method: 'eth_requestAccounts' });
     try {
@@ -246,7 +247,7 @@ async function act(addr, fn, arg) {
     remember(addr);
     if (fn === 'contribute') {
       const amt = await new ethers.Contract(addr, CIR_ABI, readProv).contribution();
-      if ((await new ethers.Contract(CFG.usdc, USDC_ABI, readProv).allowance(me, addr)).lt(amt)) { await tx(retry(() => sendTx(usdc, 'approve', [addr, ethers.constants.MaxUint256])), 'Approving'); await new Promise(r => setTimeout(r, 2500)); }
+      if ((await new ethers.Contract(CFG.usdc, USDC_ABI, readProv).allowance(me, addr)).lt(amt)) { await tx(retry(async () => sendTx(usdc, 'approve', [addr, (await new ethers.Contract(addr, CIR_ABI, readProv).maxMembers()).mul(amt)])), 'Approving'); await new Promise(r => setTimeout(r, 2500)); }
     }
     await tx(retry(() => sendTx(c, fn, arg !== undefined ? [arg] : [])), { join: 'Joining', say: 'Sending message', castVote: 'Voting', finalizeVote: 'Closing vote', contribute: 'Paying', withdraw: 'Withdrawing', abort: 'Stopping circle', refund: 'Claiming refund' }[fn]);
     await refresh(); return true;
@@ -321,6 +322,7 @@ async function disconnect() {
   say('Disconnected.');
 }
 $('disc').onclick = disconnect;
+$('faucet').onclick = async () => { try { if (me) await navigator.clipboard.writeText(me); } catch (e) {} window.open('https://faucet.monad.xyz', '_blank', 'noopener'); say(me ? 'Your address is copied. Paste it into the faucet.' : 'Connect your wallet first, then paste your address into the faucet.'); };
 let lastBlock = 0, skip = 0;
 async function tick() {
   if (!me || busy || refreshing || document.hidden) return;

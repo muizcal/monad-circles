@@ -52,7 +52,7 @@ Explorer: https://testnet.monadvision.com
 - `src/CircleFactory.sol`: creates circles and keeps a list of them.
 - `src/MockUSDC.sol`: a 6-decimal test token with a public `mint`, so anyone can try the app.
 - `src/Profiles.sol`: maps a wallet address to a display name of up to 24 characters.
-- `frontend/index.html`: the whole app in one file. It uses ethers.js for wallet and contract calls and three.js for the 3D view. A browser wallet (MetaMask or Rabby) is required.
+- `frontend/index.html`: the whole app in one file. It uses ethers.js for wallet and contract calls and three.js for the 3D view. A browser wallet (MetaMask, OKX Wallet or another EVM wallet) is required.
 
 The app keeps each person's list of circles in their browser. Opening an invite link adds that circle to the list.
 
@@ -104,6 +104,7 @@ This is a hackathon prototype. These are the main gaps we know about:
 - **Anyone with an invite link can join until the circle is full.** There is no allowlist yet.
 - **Chat is on-chain and public.** Every message is a transaction, so nothing private should be posted.
 - **The public testnet RPC is rate-limited.** If the app says the network is busy, wait a few seconds and try again.
+- **Wallets may show a warning for the demo domain.** The app is hosted on a shared vercel.app address, which some wallet security tools flag for any new app. All contracts and transactions are public on the testnet explorer.
 - **The token is a test token.** A real deployment would use a real stablecoin, and would need a compliance review in each place it is offered.
 - **Login is a normal browser wallet.** Email or passkey login with sponsored gas would suit non-crypto users better and is the next thing we would add.
 - **Circle lists are stored per browser.** Opening the invite link again restores a circle on a new device.

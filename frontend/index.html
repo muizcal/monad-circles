@@ -45,6 +45,20 @@ a{color:inherit}
 <p>Save together. Everyone pays in each round, and one member takes the whole pot, until everyone has had a turn. Rules are enforced by a contract, not by whoever holds the cash.</p>
 <div id="msg" role="status"></div>
 
+<details class="card" open>
+  <summary style="cursor:pointer;font-weight:600">How to use this app</summary>
+  <p style="margin-top:10px"><strong>Testnet only.</strong> The dollars here are free test tokens with no real value. Never send real money to this app.</p>
+  <ol style="margin:8px 0 0 18px;padding:0;color:var(--mut)">
+    <li>Connect a browser wallet (MetaMask or Rabby). You need a little free testnet MON for fees from faucet.monad.xyz. Then click "Get 100 test dollars".</li>
+    <li>Start a circle: choose how much each person pays, how many members, and the round length. Press "Copy invite link" and send it to your group. If a friend sent you a link, just open it.</li>
+    <li>Everyone joins, can save a display name, and can chat with the group.</li>
+    <li>When the circle is full, every member votes: pots locked until the last round (safest), or withdraw as you receive.</li>
+    <li>Each round, everyone pays. When the last payment lands, the contract picks a random member who has not won yet, and the history line shows who won.</li>
+    <li>Locked: winners withdraw after the final round. Withdraw as you receive: winners can withdraw any time. If you have not paid the current round, your share is taken out of what you withdraw.</li>
+    <li>If a locked circle stalls for two rounds, any member can stop it and everyone claims back what they paid.</li>
+  </ol>
+</details>
+
 <div class="card">
   <div class="row">
     <button id="connect" class="go">Connect wallet</button>
@@ -77,7 +91,7 @@ const CFG = {
   rpc: 'https://testnet-rpc.monad.xyz',
   explorer: 'https://testnet.monadvision.com',
   usdc: '0x4Df8678F2b555a1bE6C0264C2A8Ab3df20c581c6',
-  factory: '0xCfEE7461273A19b9b0e8e41cBD7b01A1E203DC26',
+  factory: '0xc207fEdF3D33a91fA15528749df8Bc4cf44e35eb',
   profiles: '0xab97F0d0af3f386b56DcBa66aE33989feEaDd3Ff'
 };
 const USDC_ABI = ['function mint(address,uint256)','function approve(address,uint256) returns (bool)','function allowance(address,address) view returns (uint256)','function balanceOf(address) view returns (uint256)'];
@@ -175,7 +189,7 @@ async function card(addr) {
     const m = members[i], cls = !m ? 'slot' : 'slot in' + (paidF[i] ? ' paid' : '') + (got[lc(m)] ? ' turn' : '');
     slots += `<div class="slot ${cls}" title="${m || 'open seat'}">${m ? (lc(m) === mine ? 'You' : esc(nm[i])) : 'open'}${m && got[lc(m)] ? ' ★' : ''}</div>`;
   }
-  const history = recips.map((a, i) => `<div>Round ${i + 1}: <strong>${lc(a) === mine ? 'You' : esc(nm[members.findIndex(m => lc(m) === lc(a))])}</strong> received $${fmt(amt.mul(n))}</div>`).join('');
+  const history = recips.map((a, i) => `<div>Round ${i + 1}: <strong>${lc(a) === mine ? 'You' : esc(nm[members.findIndex(m => lc(m) === lc(a))])}</strong> won $${fmt(amt.mul(n))}</div>`).join('');
   const PH = ['Waiting for members (' + members.length + '/' + n + ')', 'Voting', 'Round ' + (rd + 1) + ' of ' + n, 'Finished', 'Stopped'];
   let poll = '';
   if (p === 1) poll = `<div class="poll"><strong>How should pots be paid?</strong>
@@ -184,11 +198,12 @@ async function card(addr) {
     <button ${myVote || !joined ? 'disabled' : ''} onclick="act('${addr}','castVote',2)">Withdraw as I receive (${vA})</button></div>
     <p>${myVote ? 'You voted ' + (myVote === 1 ? 'locked' : 'withdraw as you receive') + '. ' : ''}${vL.add(vA)} of ${n} voted. Payments start when everyone has voted. A tie means locked.</p>
     <button class="alt" onclick="act('${addr}','finalizeVote')">Close voting (works after 1 day)</button></div>`;
+  const keepAmt = active && joined && !paidF[idx] ? amt : ethers.constants.Zero, net = owed.gt(keepAmt) ? owed.sub(keepAmt) : ethers.constants.Zero;
   const canW = owed.gt(0) && (p === 3 || (p === 2 && md === 1));
   let btns = '';
   if (p === 0 && !joined) btns += `<button onclick="act('${addr}','join')">Join circle</button>`;
   if (active && joined && !paidF[idx]) btns += `<button class="go" onclick="act('${addr}','contribute')">Pay $${fmt(amt)}</button>`;
-  if (canW) btns += `<button class="go" onclick="act('${addr}','withdraw')">Withdraw $${fmt(owed)}</button>`;
+  if (canW) btns += `<button class="go" onclick="act('${addr}','withdraw')">Withdraw $${fmt(p === 3 ? owed : net)}${p === 2 && keepAmt.gt(0) ? ' (your $' + fmt(keepAmt) + ' payment for this round is taken from it)' : ''}</button>`;
   if (active && md === 0 && joined && Date.now() / 1000 > cs.toNumber() + 2 * dur.toNumber()) btns += `<button class="alt" onclick="act('${addr}','abort')">Stop circle and get refunds</button>`;
   if (p === 4 && joined) btns += `<button class="go" onclick="act('${addr}','refund')">Claim refund</button>`;
   const mypot = joined && owed.gt(0) ? `<div class="meta"><strong>Your pot: $${fmt(owed)}</strong><span class="tag">${canW ? 'Ready to withdraw' : 'Locked until all rounds finish'}</span></div>` : '';
@@ -201,15 +216,16 @@ async function card(addr) {
     <div class="row">${btns}<button class="alt" onclick="view('${addr}')">View in 3D</button><button class="alt" onclick="share('${addr}')">Copy invite link</button></div>${chat}</div>`;
 }
 
+async function retry(f) { try { return await f(); } catch (e) { if (/missing revert data|CALL_EXCEPTION|UNPREDICTABLE_GAS_LIMIT/.test((e.code || '') + ' ' + (e.message || ''))) { await new Promise(r => setTimeout(r, 2000)); return await f(); } throw e; } }
 async function act(addr, fn, arg) {
   try {
     const c = new ethers.Contract(addr, CIR_ABI, signer);
     remember(addr);
     if (fn === 'contribute') {
       const amt = await c.contribution();
-      if ((await usdc.allowance(me, addr)).lt(amt)) await tx(usdc.approve(addr, ethers.constants.MaxUint256), 'Approving');
+      if ((await usdc.allowance(me, addr)).lt(amt)) { await tx(usdc.approve(addr, ethers.constants.MaxUint256), 'Approving'); await new Promise(r => setTimeout(r, 2500)); }
     }
-    await tx(c[fn](...(arg !== undefined ? [arg] : [])), { join: 'Joining', say: 'Sending message', castVote: 'Voting', finalizeVote: 'Closing vote', contribute: 'Paying', withdraw: 'Withdrawing', abort: 'Stopping circle', refund: 'Claiming refund' }[fn]);
+    await tx(retry(() => c[fn](...(arg !== undefined ? [arg] : []))), { join: 'Joining', say: 'Sending message', castVote: 'Voting', finalizeVote: 'Closing vote', contribute: 'Paying', withdraw: 'Withdrawing', abort: 'Stopping circle', refund: 'Claiming refund' }[fn]);
     await refresh(); return true;
   } catch (e) { err(e); return false; }
 }

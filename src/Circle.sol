@@ -132,6 +132,15 @@ contract Circle {
         uint256 a = owed[msg.sender];
         require(a > 0, "nothing");
         owed[msg.sender] = 0;
+        if (phase == Phase.Active && !paid[currentRound][msg.sender]) {
+            // collecting before paying this round: the share comes out of the pot
+            a -= contribution;
+            paid[currentRound][msg.sender] = true;
+            totalPaid[msg.sender] += contribution;
+            paidCount++;
+            emit Contributed(msg.sender, currentRound);
+            if (paidCount == members.length) _draw();
+        }
         require(token.transfer(msg.sender, a), "failed");
         emit Withdrawn(msg.sender, a);
     }

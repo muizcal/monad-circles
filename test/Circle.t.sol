@@ -64,7 +64,7 @@ contract CircleTest is Test {
         address first = circle.getRecipients()[0];
         vm.prank(first);
         circle.withdraw();
-        assertEq(usdc.balanceOf(first), 100e6 - AMT + 3 * AMT);
+        assertEq(usdc.balanceOf(first), 100e6 - 2 * AMT + 3 * AMT);
     }
 
     function test_TieDefaultsToLocked() public {
